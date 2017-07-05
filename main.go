@@ -123,7 +123,7 @@ func main() {
 
 		result.Transactions = result.results.Success + result.results.Failed
 		if result.results.Failed != 0 {
-			result.Availability = 100 - 100*float64(result.Transactions)/float64(result.results.Failed)
+			result.Availability = 100 - 100*float64(result.results.Failed)/float64(result.Transactions)
 		} else {
 			result.Availability = 100
 		}
