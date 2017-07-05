@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,6 +43,10 @@ func main() {
 			Name:  "benchmark, b",
 			Usage: "Benchmark mode",
 		},
+		cli.BoolFlag{
+			Name:  "quiet, q",
+			Usage: "Quiet mode",
+		},
 		cli.IntFlag{
 			Name:  "concurrent, c",
 			Value: 10,
@@ -54,7 +59,7 @@ func main() {
 		},
 		cli.Float64Flag{
 			Name:  "delay, d",
-			Value: 0.5,
+			Value: 1.0,
 			Usage: "Delay",
 		},
 	}
@@ -142,6 +147,8 @@ func httpAccess(c *cli.Context, u *url.URL, client *http.Client, receiveCh chan 
 	result.Shortest = 999
 	result.Longest = 0
 
+	rand.Seed(time.Now().UnixNano() + int64(number))
+
 Label:
 	for {
 		select {
@@ -187,9 +194,8 @@ Label:
 			tsub2 := t2.Sub(t0)
 			restime := tsub1.Seconds()
 
-			if !c.GlobalBool("benchmark") {
+			if !c.GlobalBool("quiet") {
 				//log.Printf("%s %d %5.2f secs: %d bytes %s %s %d\n",
-
 				fmt.Printf("%s %d %5.2f secs: %d bytes %s %s %d\n",
 					response.Proto, response.StatusCode, restime, len(body), u.Path, addr, int(tsub2.Seconds()))
 			}
@@ -204,8 +210,9 @@ Label:
 			}
 
 		}
-
-		time.Sleep(time.Duration(c.GlobalFloat64("delay")*1000) * time.Millisecond)
+		if !c.GlobalBool("benchmark") {
+			time.Sleep(time.Duration(c.GlobalFloat64("delay")*rand.Float64()*1000) * time.Millisecond)
+		}
 	}
 
 	sendCh <- result
