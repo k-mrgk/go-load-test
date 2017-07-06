@@ -87,7 +87,7 @@ func main() {
 				//Proxy: http.ProxyFromEnvironment,
 				DisableKeepAlives: true,
 			},
-			Timeout: time.Duration(60) * time.Second,
+			Timeout: time.Duration(150) * time.Second,
 		}
 
 		ch1 := make(chan struct{})
@@ -181,14 +181,18 @@ Label:
 			}
 
 			body, err := ioutil.ReadAll(response.Body)
-
-			if err != nil {
-				log.Println(err)
-				result.Failed++
+			flag := false
+			func() {
+				if err != nil {
+					log.Println(err)
+					result.Failed++
+					flag = true
+				}
+				defer response.Body.Close()
+			}()
+			if flag {
 				break
 			}
-			defer response.Body.Close()
-
 			t2 := time.Now()
 			tsub1 := t2.Sub(t1)
 			tsub2 := t2.Sub(t0)
