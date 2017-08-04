@@ -86,6 +86,13 @@ func main() {
 			Transport: &http.Transport{
 				//Proxy: http.ProxyFromEnvironment,
 				DisableKeepAlives: true,
+				Dial: (&net.Dialer{
+					Timeout: time.Duration(150) * time.Second,
+					//					KeepAlive: 30 * time.Second,
+				}).Dial,
+				TLSHandshakeTimeout:   time.Duration(150) * time.Second,
+				ResponseHeaderTimeout: time.Duration(150) * time.Second,
+				ExpectContinueTimeout: time.Duration(150) * time.Second,
 			},
 			Timeout: time.Duration(150) * time.Second,
 		}
@@ -94,6 +101,7 @@ func main() {
 		ch2 := make(chan EachResult)
 		wg := new(sync.WaitGroup)
 		t := time.Now()
+		fmt.Println(t.Format("2006-01-02 15:04:05"))
 
 		for i := 0; i < c.GlobalInt("concurrent"); i++ {
 			wg.Add(1)
