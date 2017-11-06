@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/urfave/cli"
 )
 
@@ -25,14 +27,43 @@ type EachResult struct {
 }
 
 type AllResult struct {
-	results         EachResult
+	Results         EachResult
 	Transactions    int
 	Availability    float64
 	TransactionRate float64
 	Throughput      float64
 }
 
+//var ip map[string]int
+var mu *sync.Mutex
+var cpus int
+var stopCh chan struct{}
+var resCh chan EachResult
+
+var dnsIP = [...]string{
+	"192.168.11.83", "192.168.11.84", "192.168.11.85",
+	"192.168.11.86", "192.168.11.87", "192.168.11.88",
+	"192.168.11.89", "192.168.11.90", "192.168.11.91",
+	"192.168.11.92", "192.168.11.93", "192.168.11.94",
+	"192.168.11.95", "192.168.11.96", "192.168.11.97",
+	"192.168.11.98", "192.168.11.99", "192.168.11.100",
+	"192.168.11.160", "192.168.11.161", "192.168.11.162",
+	"192.168.11.163", "192.168.11.164", "192.168.11.165",
+}
+
+func init() {
+	cpus = runtime.NumCPU()
+	runtime.GOMAXPROCS(cpus)
+	if cpus == 1 {
+		rand.Seed(time.Now().UnixNano())
+	}
+}
+
 func main() {
+
+	ip = make(map[string]int)
+	mu = new(sync.Mutex)
+
 	app := cli.NewApp()
 	app.Name = "go-access"
 	app.Usage = "HTTP Stress Test Tool for golang"
@@ -82,65 +113,78 @@ func main() {
 		if err != nil {
 			return err
 		}
+
 		client := &http.Client{
 			Transport: &http.Transport{
 				//Proxy: http.ProxyFromEnvironment,
 				DisableKeepAlives: true,
 				Dial: (&net.Dialer{
-					Timeout: time.Duration(150) * time.Second,
-					//					KeepAlive: 30 * time.Second,
+					Timeout: time.Duration(120) * time.Second,
+					//KeepAlive: 30 * time.Second,
 				}).Dial,
-				TLSHandshakeTimeout:   time.Duration(150) * time.Second,
-				ResponseHeaderTimeout: time.Duration(150) * time.Second,
-				ExpectContinueTimeout: time.Duration(150) * time.Second,
+				//TLSHandshakeTimeout:   time.Duration(150) * time.Second,
+				//ResponseHeaderTimeout: time.Duration(150) * time.Second,
+				//ExpectContinueTimeout: time.Duration(150) * time.Second,
 			},
-			Timeout: time.Duration(150) * time.Second,
 		}
 
-		ch1 := make(chan struct{})
-		ch2 := make(chan EachResult)
-		wg := new(sync.WaitGroup)
+		m := &dns.Msg{
+			MsgHdr: dns.MsgHdr{
+				Authoritative:     false,
+				AuthenticatedData: false,
+				CheckingDisabled:  false,
+				RecursionDesired:  true,
+				Opcode:            dns.OpcodeQuery,
+			},
+			Question: make([]dns.Question, 1),
+		}
+
+		m.Rcode = dns.RcodeSuccess
+		m.Question[0] = dns.Question{Name: dns.Fqdn(u.Host), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+		m.Id = dns.Id()
+
+		stopCh = make(chan struct{})
+		resCh = make(chan EachResult, c.GlobalInt("concurrent"))
+
 		t := time.Now()
 		fmt.Println(t.Format("2006-01-02 15:04:05"))
 
 		for i := 0; i < c.GlobalInt("concurrent"); i++ {
-			wg.Add(1)
-			go httpAccess(c, u, client, ch1, ch2, wg, t, i)
+			go httpAccess(c, u, client, t, i, len(dnsIP), m)
 		}
 		time.Sleep(time.Duration(c.GlobalInt("time")) * time.Second)
-		close(ch1)
+		close(stopCh)
 
 		var result AllResult
-		result.results.Longest = 0
-		result.results.Shortest = 999
+		result.Results.Longest = 0
+		result.Results.Shortest = 999
 
 		for i := 0; i < c.GlobalInt("concurrent"); i++ {
-			res := <-ch2
-			result.results.Data += res.Data
-			result.results.Response += res.Response
-			result.results.Success += res.Success
-			result.results.Failed += res.Failed
-			if result.results.Longest < res.Longest {
-				result.results.Longest = res.Longest
+			res := <-resCh
+			result.Results.Data += res.Data
+			result.Results.Response += res.Response
+			result.Results.Success += res.Success
+			result.Results.Failed += res.Failed
+			if result.Results.Longest < res.Longest {
+				result.Results.Longest = res.Longest
 			}
-			if result.results.Shortest > res.Shortest {
-				result.results.Shortest = res.Shortest
+			if result.Results.Shortest > res.Shortest {
+				result.Results.Shortest = res.Shortest
 			}
 		}
-		wg.Wait()
 
-		result.Transactions = result.results.Success + result.results.Failed
-		if result.results.Failed != 0 {
-			result.Availability = 100 - 100*float64(result.results.Failed)/float64(result.Transactions)
+		result.Transactions = result.Results.Success + result.Results.Failed
+		if result.Results.Failed != 0 {
+			result.Availability = 100 - 100*float64(result.Results.Failed)/float64(result.Transactions)
 		} else {
 			result.Availability = 100
 		}
 		result.TransactionRate = float64(result.Transactions) / float64(c.GlobalInt("time"))
-		result.Throughput = float64(result.results.Data) / float64(c.GlobalInt("time"))
-		result.results.Response /= float64(result.results.Success)
+		result.Throughput = float64(result.Results.Data) / float64(c.GlobalInt("time"))
+		result.Results.Response /= float64(result.Results.Success)
 
 		fmt.Printf("Transactions: %21d hits\nAvailability: %21.2f %%\nData transferred: %17.2f MB\nResponse time: %20.2f secs\nTransaction rate: %17.2f trans/sec\nThroughput: %23.2f MB/sec\nSuccessful transactions: %10d\nFailed transactions: %14d\nLongest transaction: %14.2f\nShortest transaction: %13.2f\n",
-			result.Transactions, result.Availability, float64(result.results.Data)/1024/1024, result.results.Response, result.TransactionRate, result.Throughput/1024/1024, result.results.Success, result.results.Failed, result.results.Longest, result.results.Shortest)
+			result.Transactions, result.Availability, float64(result.Results.Data)/1024/1024, result.Results.Response, result.TransactionRate, result.Throughput/1024/1024, result.Results.Success, result.Results.Failed, result.Results.Longest, result.Results.Shortest)
 
 		return nil
 
@@ -149,28 +193,47 @@ func main() {
 
 }
 
-func httpAccess(c *cli.Context, u *url.URL, client *http.Client, receiveCh chan struct{}, sendCh chan EachResult, wg *sync.WaitGroup, t0 time.Time, number int) {
+func httpAccess(c *cli.Context, u *url.URL, client *http.Client, t0 time.Time, num, l int, m *dns.Msg) {
 
 	var result EachResult
+	var rnd *rand.Rand
+	var q *dns.Msg
+	var err error
+	var r int
+
 	result.Shortest = 999
 	result.Longest = 0
-
-	rand.Seed(time.Now().UnixNano() + int64(number))
+	if cpus == 1 {
+		rnd = rand.New(rand.NewSource(time.Now().UnixNano() + int64(num)))
+	}
+	d := new(dns.Client)
+	d.Net = "udp4"
 
 Label:
 	for {
 		select {
-		case <-receiveCh:
-			//fmt.Println("Closed channnel ", number)
+		case <-stopCh:
 			break Label
 		default:
-			addrs, err := net.LookupHost(u.Host)
+			if cpus == 1 {
+				r = rand.Intn(l)
+			} else {
+				r = rnd.Intn(l)
+			}
+			q, _, err = d.Exchange(m, dnsIP[r]+":53")
 			if err != nil {
 				log.Println(err)
 				result.Failed++
 				break
 			}
-			addr := addrs[0]
+
+			addr := (q.Answer[0].(*dns.A).A).String()
+
+			/*
+				mu.Lock()
+				ip[addr]++
+				mu.Unlock()
+			*/
 
 			url := u.Scheme + "://" + addr + u.Path
 			request, err := http.NewRequest("GET", url, nil)
@@ -207,7 +270,6 @@ Label:
 			restime := tsub1.Seconds()
 
 			if !c.GlobalBool("quiet") {
-				//log.Printf("%s %d %5.2f secs: %d bytes %s %s %d\n",
 				fmt.Printf("%s %d %5.2f secs: %d bytes %s %s %d\n",
 					response.Proto, response.StatusCode, restime, len(body), u.Path, addr, int(tsub2.Seconds()))
 			}
@@ -223,10 +285,15 @@ Label:
 
 		}
 		if !c.GlobalBool("benchmark") {
-			time.Sleep(time.Duration(c.GlobalFloat64("delay")*rand.Float64()*1000) * time.Millisecond)
+			var fnum float64
+			if cpus == 1 {
+				fnum = rand.Float64()
+			} else {
+				fnum = rnd.Float64()
+			}
+			time.Sleep(time.Duration(c.GlobalFloat64("delay")*fnum*1000) * time.Millisecond)
 		}
 	}
 
-	sendCh <- result
-	wg.Done()
+	resCh <- result
 }
